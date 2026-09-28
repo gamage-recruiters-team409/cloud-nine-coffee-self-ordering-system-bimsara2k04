@@ -1,0 +1,16 @@
+node_modules
+.dist
+.next
+coverage
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+npm-debug.log*
+.vercel
+.idea
+.vscode
+apps/backend/dist
+apps/frontend/.next
+.kilo/
