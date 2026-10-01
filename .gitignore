@@ -14,3 +14,4 @@ npm-debug.log*
 apps/backend/dist
 apps/frontend/.next
 .kilo/
+CLAUDE.md
