@@ -1,0 +1,199 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  BARISTA
+}
+
+enum OrderStatus {
+  RECEIVED
+  PREPARING
+  READY_FOR_PICKUP
+  COLLECTED
+}
+
+enum DiningOption {
+  DINE_IN
+  TAKEAWAY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model User {
+  id            String               @id @default(uuid())
+  email         String               @unique
+  password      String
+  role          Role
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  statusChanges OrderStatusHistory[]
+}
+
+model Ingredient {
+  id                  String                     @id @default(uuid())
+  name                String                     @unique
+  isAvailable         Boolean                    @default(true)
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  drinkIngredients    DrinkIngredient[]
+  modifierIngredients ModifierOptionIngredient[]
+}
+
+model DrinkCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  drinks    Drink[]
+}
+
+model Drink {
+  id             String               @id @default(uuid())
+  name           String
+  description    String?
+  price          Decimal              @db.Decimal(10, 2)
+  isAvailable    Boolean              @default(true)
+  sortOrder      Int                  @default(0)
+  categoryId     String
+  category       DrinkCategory        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  ingredients    DrinkIngredient[]
+  modifierGroups DrinkModifierGroup[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+model DrinkIngredient {
+  drinkId      String
+  ingredientId String
+  drink        Drink      @relation(fields: [drinkId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@id([drinkId, ingredientId])
+  @@index([ingredientId])
+}
+
+model ModifierGroup {
+  id            String               @id @default(uuid())
+  name          String
+  minSelections Int                  @default(0)
+  maxSelections Int                  @default(1)
+  isRequired    Boolean              @default(false)
+  sortOrder     Int                  @default(0)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  options       ModifierOption[]
+  drinks        DrinkModifierGroup[]
+}
+
+model ModifierOption {
+  id              String                     @id @default(uuid())
+  name            String
+  priceAdjustment Decimal                    @default(0) @db.Decimal(10, 2)
+  isAvailable     Boolean                    @default(true)
+  sortOrder       Int                        @default(0)
+  groupId         String
+  group           ModifierGroup              @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  ingredients     ModifierOptionIngredient[]
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+}
+
+model DrinkModifierGroup {
+  drinkId         String
+  modifierGroupId String
+  drink           Drink         @relation(fields: [drinkId], references: [id], onDelete: Cascade)
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@id([drinkId, modifierGroupId])
+  @@index([modifierGroupId])
+}
+
+model ModifierOptionIngredient {
+  optionId     String
+  ingredientId String
+  option       ModifierOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient     @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@id([optionId, ingredientId])
+  @@index([ingredientId])
+}
+
+model Order {
+  id            String               @id @default(uuid())
+  orderNumber   Int                  @unique @default(autoincrement())
+  status        OrderStatus          @default(RECEIVED)
+  diningOption  DiningOption         @default(DINE_IN)
+  paymentStatus PaymentStatus        @default(PENDING)
+  paymentMethod String?              @default("SANDBOX")
+  customerName  String?
+  paidAt        DateTime?
+  total         Decimal              @db.Decimal(10, 2)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  trackingToken OrderTrackingToken?
+
+  @@index([status, createdAt])
+  @@index([paymentStatus])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id         String              @id @default(uuid())
+  orderId    String
+  order      Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  drinkId    String
+  drinkName  String
+  drinkPrice Decimal             @db.Decimal(10, 2)
+  quantity   Int
+  modifiers  OrderItemModifier[]
+  createdAt  DateTime            @default(now())
+
+  @@index([orderId])
+}
+
+model OrderItemModifier {
+  id              String    @id @default(uuid())
+  itemId          String
+  item            OrderItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  optionId        String
+  optionName      String
+  priceAdjustment Decimal   @db.Decimal(10, 2)
+
+  @@index([itemId])
+}
+
+model OrderStatusHistory {
+  id          String      @id @default(uuid())
+  orderId     String
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status      OrderStatus
+  changedAt   DateTime    @default(now())
+  changedById String?
+  changedBy   User?       @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId, changedAt])
+  @@index([changedById])
+}
+
+model OrderTrackingToken {
+  id        String   @id @default(uuid())
+  orderId   String   @unique
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
