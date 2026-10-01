@@ -25,6 +25,7 @@ describe('OrdersService', () => {
       findMany: jest.fn(),
     },
     orderTrackingToken: {
+      findUnique: jest.fn(),
       create: jest.fn(),
     },
   };
@@ -113,10 +114,36 @@ describe('OrdersService', () => {
 
       expect(result.id).toBe('order-1');
       expect(result.paymentStatus).toBe('PENDING');
-      // Tracking token must NOT be in the create response
-      expect((result as any).trackingToken).toBeUndefined();
+      // A tracking token IS minted up front so the kiosk can show the QR on
+      // return from PayHere without waiting for the notify callback.
+      expect(result.trackingToken).toBeTruthy();
+      expect(mockPrisma.orderTrackingToken.create).toHaveBeenCalled();
       // Barista must NOT be notified until payment confirmed
       expect(mockRealtime.emitOrderCreated).not.toHaveBeenCalled();
+      // And the order must NOT be marked paid by the browser
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('reuses an existing tracking token rather than minting a second one', async () => {
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 1,
+        status: 'RECEIVED',
+        paymentStatus: 'PENDING',
+        total: 3.0,
+        items: [],
+      });
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue({
+        tokenHash: 'existing-token',
+      });
+
+      const result = await service.create({
+        items: [{ drinkId: 'drink-espresso', quantity: 1 }],
+        diningOption: 'DINE_IN',
+      });
+
+      expect(result.trackingToken).toBe('existing-token');
+      expect(mockPrisma.orderTrackingToken.create).not.toHaveBeenCalled();
     });
   });
 
@@ -159,6 +186,7 @@ describe('OrdersService', () => {
         items: [],
         statusHistory: [],
       });
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue(null);
       mockPrisma.orderTrackingToken.create.mockResolvedValue({});
 
       const result = await service.markOrderPaid('order-1');
@@ -167,6 +195,29 @@ describe('OrdersService', () => {
       expect(result.trackingToken).toBeDefined();
       expect(result.alreadyProcessed).toBe(false);
       expect(mockPrisma.orderTrackingToken.create).toHaveBeenCalled();
+      expect(mockRealtime.emitOrderCreated).toHaveBeenCalled();
+    });
+
+    it('reuses the token minted at creation instead of issuing a second one', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 1,
+        status: 'RECEIVED',
+        paymentStatus: 'PENDING',
+        total: 3.0,
+        items: [],
+        statusHistory: [],
+        trackingToken: { tokenHash: 'token-from-create' },
+      });
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue({
+        tokenHash: 'token-from-create',
+      });
+
+      const result = await service.markOrderPaid('order-1');
+
+      expect(result.trackingToken).toBe('token-from-create');
+      expect(mockPrisma.orderTrackingToken.create).not.toHaveBeenCalled();
+      // Activation still only happens here, never in create()
       expect(mockRealtime.emitOrderCreated).toHaveBeenCalled();
     });
   });

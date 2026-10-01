@@ -13,6 +13,11 @@ describe('PaymentsService', () => {
   let service: PaymentsService;
   let markOrderPaid: jest.Mock;
   let markOrderFailed: jest.Mock;
+  let mockOrders: {
+    markOrderPaid: jest.Mock;
+    markOrderFailed: jest.Mock;
+    issueTrackingToken: jest.Mock;
+  };
 
   const MERCHANT_ID = '1234567';
   const SECRET = 'TEST_SECRET_KEY';
@@ -20,7 +25,12 @@ describe('PaymentsService', () => {
   const mockPrisma = {
     order: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       update: jest.fn(),
+    },
+    orderTrackingToken: {
+      findUnique: jest.fn(),
+      create: jest.fn(),
     },
   };
 
@@ -52,12 +62,17 @@ describe('PaymentsService', () => {
   beforeEach(async () => {
     markOrderPaid = jest.fn().mockResolvedValue({});
     markOrderFailed = jest.fn().mockResolvedValue(undefined);
+    mockOrders = {
+      markOrderPaid,
+      markOrderFailed,
+      issueTrackingToken: jest.fn().mockResolvedValue('minted-token'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentsService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: OrdersService, useValue: { markOrderPaid, markOrderFailed } },
+        { provide: OrdersService, useValue: mockOrders },
       ],
     }).compile();
 
@@ -172,6 +187,10 @@ describe('PaymentsService', () => {
         items: [{ quantity: 2, drinkName: 'Cappuccino' }],
       });
 
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue({
+        tokenHash: 'token-abc',
+      });
+
       const result = await service.initPayment('order-1', {});
 
       expect(result.action).toBe('https://sandbox.payhere.lk/pay/checkout');
@@ -184,6 +203,46 @@ describe('PaymentsService', () => {
       expect(result.fields.hash).toMatch(/^[0-9A-F]{32}$/);
       expect(result.fields.notify_url).toContain('/payments/payhere/notify');
       expect(JSON.stringify(result)).not.toContain(SECRET);
+    });
+
+    it('carries the tracking token in the return_url path so the QR survives the redirect', async () => {
+      // PayHere can drop the query string, and the kiosk may be on a different
+      // origin than PUBLIC_URL, which breaks sessionStorage. The path survives
+      // both, so the return page can always render the QR.
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 7,
+        total: 100,
+        paymentStatus: 'PENDING',
+        items: [],
+      });
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue({
+        tokenHash: 'token-abc',
+      });
+
+      const result = await service.initPayment('order-1', {});
+
+      // Asserted structurally so it holds regardless of PUBLIC_URL in .env.
+      expect(result.fields.return_url).toMatch(
+        /^https?:\/\/.+\/kiosk\/success\/token-abc$/,
+      );
+    });
+
+    it('mints a tracking token if the order somehow has none yet', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 7,
+        total: 100,
+        paymentStatus: 'PENDING',
+        items: [],
+      });
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue(null);
+      mockOrders.issueTrackingToken.mockResolvedValue('freshly-minted');
+
+      const result = await service.initPayment('order-1', {});
+
+      expect(mockOrders.issueTrackingToken).toHaveBeenCalledWith('order-1');
+      expect(result.fields.return_url).toContain('/kiosk/success/freshly-minted');
     });
 
     it('rejects an order that is already paid', async () => {
@@ -229,8 +288,11 @@ describe('PaymentsService', () => {
   });
 
   describe('getPaymentStatus', () => {
-    it('does not expose a tracking token before payment is confirmed', async () => {
-      mockPrisma.order.findUnique.mockResolvedValue({
+    it('still withholds confirmation while reporting the QR token', async () => {
+      // The token is minted at creation so the kiosk can render the QR on
+      // return from PayHere, but `paid` must stay false until the notify
+      // callback confirms it.
+      mockPrisma.order.findFirst.mockResolvedValue({
         id: 'order-1',
         orderNumber: 7,
         paymentStatus: 'PENDING',
@@ -240,11 +302,12 @@ describe('PaymentsService', () => {
       const result = await service.getPaymentStatus('order-1');
 
       expect(result.paid).toBe(false);
-      expect(result.trackingToken).toBeNull();
+      expect(result.paymentStatus).toBe('PENDING');
+      expect(result.trackingToken).toBe('secret-token');
     });
 
     it('exposes the tracking token once payment is confirmed', async () => {
-      mockPrisma.order.findUnique.mockResolvedValue({
+      mockPrisma.order.findFirst.mockResolvedValue({
         id: 'order-1',
         orderNumber: 7,
         paymentStatus: 'PAID',
@@ -255,6 +318,94 @@ describe('PaymentsService', () => {
 
       expect(result.paid).toBe(true);
       expect(result.trackingToken).toBe('secret-token');
+    });
+
+    it('resolves an order by its human order number as well as its uuid', async () => {
+      // PayHe's redirect can drop the uuid, so the return page falls back to
+      // the order number shown to the customer.
+      mockPrisma.order.findFirst.mockResolvedValue({
+        id: 'order-1',
+        orderNumber: 7,
+        paymentStatus: 'PAID',
+        trackingToken: { tokenHash: 'secret-token' },
+      });
+
+      const result = await service.getPaymentStatus('7');
+
+      expect(mockPrisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { orderNumber: 7 } }),
+      );
+      expect(result.orderNumber).toBe(7);
+    });
+
+    it('treats a non-numeric identifier as a uuid lookup', async () => {
+      mockPrisma.order.findFirst.mockResolvedValue({
+        id: '212585d5-c95d-43f4-8dbd-66539ca570e7',
+        orderNumber: 49,
+        paymentStatus: 'PAID',
+        trackingToken: { tokenHash: 'secret-token' },
+      });
+
+      await service.getPaymentStatus('212585d5-c95d-43f4-8dbd-66539ca570e7');
+
+      expect(mockPrisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: '212585d5-c95d-43f4-8dbd-66539ca570e7' },
+        }),
+      );
+    });
+  });
+
+  describe('getLatestPaymentStatus', () => {
+    it('returns the most recent unpaid order without marking it paid', async () => {
+      mockPrisma.order.findFirst.mockResolvedValue({
+        id: 'order-9',
+        orderNumber: 9,
+        paymentStatus: 'PENDING',
+        trackingToken: null,
+      });
+
+      const result = await service.getLatestPaymentStatus();
+
+      expect(mockPrisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { paymentStatus: { in: ['PENDING', 'PAID'] } },
+          orderBy: { orderNumber: 'desc' },
+        }),
+      );
+      expect(result.paid).toBe(false);
+      expect(result.trackingToken).toBeNull();
+    });
+
+    it('recovers the QR for an unpaid order without claiming it was paid', async () => {
+      // The kiosk shows the QR on return from PayHere, so /latest must be able
+      // to hand back a token for an order the notify callback has not confirmed.
+      mockPrisma.order.findFirst.mockResolvedValue({
+        id: 'order-9',
+        orderNumber: 9,
+        paymentStatus: 'PENDING',
+        trackingToken: { tokenHash: 'early-token' },
+      });
+
+      const result = await service.getLatestPaymentStatus();
+
+      expect(result.trackingToken).toBe('early-token');
+      expect(result.paid).toBe(false);
+      expect(result.paymentStatus).toBe('PENDING');
+    });
+
+    it('recovers the QR when PayHere redirects back with no query string', async () => {
+      mockPrisma.order.findFirst.mockResolvedValue({
+        id: 'order-9',
+        orderNumber: 9,
+        paymentStatus: 'PAID',
+        trackingToken: { tokenHash: 'recovered-token' },
+      });
+
+      const result = await service.getLatestPaymentStatus();
+
+      expect(result.paid).toBe(true);
+      expect(result.trackingToken).toBe('recovered-token');
     });
   });
 });

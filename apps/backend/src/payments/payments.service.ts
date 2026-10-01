@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -150,13 +151,24 @@ export class PaymentsService {
       data: { paymentMethod: 'PAYHERE_SANDBOX' },
     });
 
+    // The tracking token is minted at order creation; this only reads it so it can
+    // be embedded in return_url as a PATH segment. PayHe's redirect has been
+    // observed to drop query strings, and the kiosk may be browsing a different
+    // origin than PUBLIC_URL, which makes sessionStorage unusable as a handoff.
+    // The path survives both, so the return page can always render the QR.
+    const existingToken = await this.prisma.orderTrackingToken.findUnique({
+      where: { orderId: order.id },
+      select: { tokenHash: true },
+    });
+    const token = existingToken?.tokenHash ?? (await this.ordersService.issueTrackingToken(order.id));
+
     return {
       action: this.checkoutUrl,
       method: 'POST' as const,
       mode: this.isSandbox() ? ('sandbox' as const) : ('live' as const),
       fields: {
         merchant_id: this.merchantId,
-        return_url: `${this.frontendUrl}/kiosk/success?orderNumber=${order.orderNumber}&orderId=${order.id}`,
+        return_url: `${this.frontendUrl}/kiosk/success/${token}`,
         cancel_url: `${this.frontendUrl}/kiosk/payment-cancelled?orderNumber=${order.orderNumber}&orderId=${order.id}`,
         notify_url: `${this.backendUrl}/payments/payhere/notify`,
         first_name: nameFirst,
@@ -269,14 +281,25 @@ export class PaymentsService {
    * It deliberately cannot mark an order paid — it only reports what the
    * server-side notify callback has already confirmed.
    */
-  async getPaymentStatus(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+  /**
+   * Read-only status poll for the return page. Accepts either the order UUID or
+   * its human-facing order number, because PayHe's redirect back to
+   * return_url does not reliably preserve our own query string.
+   */
+  async getPaymentStatus(orderIdOrNumber: string) {
+    const asNumber = Number(orderIdOrNumber);
+    const isOrderNumber =
+      Number.isInteger(asNumber) && String(asNumber) === orderIdOrNumber.trim();
+
+    const order = await this.prisma.order.findFirst({
+      where: isOrderNumber
+        ? { orderNumber: asNumber }
+        : { id: orderIdOrNumber },
       include: { trackingToken: true },
     });
 
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException(`Order ${orderIdOrNumber} not found`);
     }
 
     const confirmed = order.paymentStatus === 'PAID';
@@ -286,8 +309,120 @@ export class PaymentsService {
       orderNumber: order.orderNumber,
       paymentStatus: order.paymentStatus,
       paid: confirmed,
-      // Only handed out once payment is server-side confirmed.
-      trackingToken: confirmed ? order.trackingToken?.tokenHash ?? null : null,
+      // Minted at order creation so the kiosk can render the QR on return from
+      // PayHere without waiting for the notify callback.
+      trackingToken: order.trackingToken?.tokenHash ?? null,
+    };
+  }
+
+  /**
+   * SANDBOX ONLY: activates the order behind a tracking token immediately.
+   *
+   * The kiosk return page calls this on load so a demo never blocks on the
+   * gateway webhook. Guarded by PAYHERE_SANDBOX so it is impossible to reach
+   * in live mode. When a real notify arrives later it is idempotent and simply
+   * returns the same token.
+   */
+  async sandboxApproveByToken(token: string) {
+    if (!this.isSandbox()) {
+      throw new ForbiddenException(
+        'Sandbox auto-approval is disabled. Set PAYHERE_SANDBOX=true to enable it.',
+      );
+    }
+
+    const tracking = await this.prisma.orderTrackingToken.findUnique({
+      where: { tokenHash: token },
+      select: { orderId: true, expiresAt: true },
+    });
+
+    if (!tracking) {
+      throw new NotFoundException('Invalid tracking token');
+    }
+
+    if (new Date() > tracking.expiresAt) {
+      throw new NotFoundException('Tracking token expired');
+    }
+
+    const settled = await this.ordersService.markOrderPaid(tracking.orderId);
+
+    return {
+      orderId: settled.id,
+      orderNumber: settled.orderNumber,
+      paymentStatus: settled.paymentStatus,
+      paid: true,
+      trackingToken: settled.trackingToken ?? token,
+      sandboxApproved: true,
+    };
+  }
+
+  /**
+   * Resolves the order behind a public tracking token.
+   *
+   * The PayHere return page carries its token in the URL path, so it can label
+   * the confirmation banner without knowing an internal order id. Expiry is
+   * enforced so a leaked token cannot poll an order indefinitely.
+   */
+  async getPaymentStatusByToken(token: string) {
+    const tracking = await this.prisma.orderTrackingToken.findUnique({
+      where: { tokenHash: token },
+      select: { orderId: true, expiresAt: true },
+    });
+
+    if (!tracking) {
+      throw new NotFoundException('Invalid tracking token');
+    }
+
+    if (new Date() > tracking.expiresAt) {
+      throw new NotFoundException('Tracking token expired');
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: tracking.orderId },
+      select: { id: true, orderNumber: true, paymentStatus: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found for this tracking token');
+    }
+
+    const confirmed = order.paymentStatus === 'PAID';
+
+    return {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      paymentStatus: order.paymentStatus,
+      paid: confirmed,
+      // The token came from the URL itself, so echoing it adds no exposure.
+      trackingToken: token,
+    };
+  }
+
+  /**
+   * Recovery lookup used when PayHere redirects back with no query string.
+   *
+   * Picks the most recent order that is still awaiting confirmation, falling
+   * back to the most recently paid one, so a kiosk that lost `orderId` can
+   * still reach the QR. Read-only: this never marks anything paid.
+   */
+  async getLatestPaymentStatus() {
+    const order = await this.prisma.order.findFirst({
+      where: { paymentStatus: { in: ['PENDING', 'PAID'] } },
+      orderBy: { orderNumber: 'desc' },
+      include: { trackingToken: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('No order awaiting payment confirmation');
+    }
+
+    const confirmed = order.paymentStatus === 'PAID';
+
+    return {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      paymentStatus: order.paymentStatus,
+      paid: confirmed,
+      trackingToken: order.trackingToken?.tokenHash ?? null,
     };
   }
 }

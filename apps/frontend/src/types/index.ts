@@ -80,6 +80,8 @@ export interface PublicOrderTracking {
   status: 'RECEIVED' | 'PREPARING' | 'READY_FOR_PICKUP' | 'COLLECTED';
   statusLabel: string;
   statusMessage: string;
+  /** False until the PayHere notify callback confirms payment. */
+  paymentConfirmed: boolean;
   diningOption: 'DINE_IN' | 'TAKEAWAY';
   customerName: string | null;
   items: Array<{ name: string; quantity: number }>;

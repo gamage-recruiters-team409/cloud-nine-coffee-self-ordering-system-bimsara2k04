@@ -117,6 +117,12 @@ export class OrdersService {
       },
     });
 
+    // Mint the tracking token up front so the QR exists as soon as the customer
+    // returns from PayHere. This does NOT activate the order: the barista board
+    // dispatch and the PAID transition still happen only in markOrderPaid, i.e.
+    // only after a verified notify callback.
+    const token = await this.issueTrackingToken(order.id);
+
     // Return minimal pending order info so frontend proceeds to payment
     return {
       id: order.id,
@@ -124,7 +130,39 @@ export class OrdersService {
       total: order.total,
       status: order.status,
       paymentStatus: order.paymentStatus,
+      trackingToken: token,
     };
+  }
+
+  /**
+   * Creates the public tracking token for an order, or returns the existing one.
+   * Idempotent so repeated calls never mint a second token.
+   *
+   * Public so PaymentsService can read it when building PayHere return_url,
+   * which embeds the token in the URL path so the kiosk can render the QR
+   * immediately on return.
+   */
+  async issueTrackingToken(orderId: string): Promise<string> {
+    const existing = await this.prisma.orderTrackingToken.findUnique({
+      where: { orderId },
+      select: { tokenHash: true },
+    });
+
+    if (existing) {
+      return existing.tokenHash;
+    }
+
+    const tokenHash = this.generateSecureToken();
+    const expiresAt = new Date();
+    expiresAt.setHours(
+      expiresAt.getHours() + parseInt(process.env.TRACKING_TOKEN_EXPIRES_HOURS || '24'),
+    );
+
+    await this.prisma.orderTrackingToken.create({
+      data: { orderId, tokenHash, expiresAt },
+    });
+
+    return tokenHash;
   }
 
   /**
@@ -135,8 +173,11 @@ export class OrdersService {
    *
    * This is the only place that:
    *  1. Marks the order as PAID
-   *  2. Generates the tracking token
-   *  3. Emits order.created to the barista board
+   *  2. Emits order.created to the barista board
+   *
+   * The tracking token itself is minted when the order is created so the kiosk
+   * can show a QR immediately on return from PayHere. Activation is what waits
+   * for the verified callback, not the token.
    *
    * Idempotent: a duplicate notify callback returns the existing token instead
    * of creating a second one or re-notifying the barista.
@@ -177,20 +218,9 @@ export class OrdersService {
       },
     });
 
-    // Tracking token — created ONLY after confirmed payment.
-    const tokenHash = this.generateSecureToken();
-    const expiresAt = new Date();
-    expiresAt.setHours(
-      expiresAt.getHours() + parseInt(process.env.TRACKING_TOKEN_EXPIRES_HOURS || '24'),
-    );
-
-    await this.prisma.orderTrackingToken.create({
-      data: {
-        orderId: order.id,
-        tokenHash,
-        expiresAt,
-      },
-    });
+    // Tracking token — already minted at order creation so the QR exists before the
+    // customer returns from PayHere. Reuse it rather than minting a second one.
+    const tokenHash = await this.issueTrackingToken(order.id);
 
     // Dispatch to barista board only now — payment confirmed.
     this.realtimeGateway.emitOrderCreated(paid);

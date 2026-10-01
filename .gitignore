@@ -13,5 +13,6 @@ npm-debug.log*
 .vscode
 apps/backend/dist
 apps/frontend/.next
+*.tsbuildinfo
 .kilo/
 CLAUDE.md
