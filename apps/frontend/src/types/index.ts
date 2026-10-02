@@ -98,10 +98,18 @@ export interface PaymentStatusResponse {
   trackingToken: string | null;
 }
 
-/** Full PayHere form payload built server-side. */
+/**
+ * Where the kiosk should send the customer to pay.
+ *
+ * `provider` decides who hosts the payment page: 'payhere' is the real signed
+ * hosted checkout (live only) and must be POSTed as a form; 'local' is our own
+ * sandbox page and is a plain navigation. Sandboxed checkouts never touch
+ * PayHere, so a flaky gateway cannot break local demos.
+ */
 export interface PayHereInitResponse {
+  provider: 'payhere' | 'local';
   action: string;
-  method: 'POST';
+  method: 'POST' | 'GET';
   mode: 'sandbox' | 'live';
   fields: Record<string, string>;
 }

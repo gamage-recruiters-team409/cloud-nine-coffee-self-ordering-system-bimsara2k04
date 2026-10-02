@@ -7,7 +7,7 @@ import { fetchAPI } from '@/lib/api';
 import { DrinkCategory } from '@/types';
 import { useCart } from '@/contexts/CartContext';
 import { useSocket } from '@/hooks/useSocket';
-import { getDrinkImage } from '@/lib/images';
+import DrinkImage from '@/components/DrinkImage';
 
 export default function MenuPage() {
   const [categories, setCategories] = useState<DrinkCategory[]>([]);
@@ -34,12 +34,15 @@ export default function MenuPage() {
       loadMenu();
     };
 
-    socket.on('menu.availability_changed', handleAvailabilityChange);
-    socket.on('ingredient.availability_changed', handleAvailabilityChange);
+    // These names must match the gateway exactly. They previously used
+    // snake_case while the server emits camelCase, so an admin changing a price
+    // or availability never reached an already-open kiosk.
+    socket.on('menu.availabilityChanged', handleAvailabilityChange);
+    socket.on('ingredient.availabilityChanged', handleAvailabilityChange);
 
     return () => {
-      socket.off('menu.availability_changed', handleAvailabilityChange);
-      socket.off('ingredient.availability_changed', handleAvailabilityChange);
+      socket.off('menu.availabilityChanged', handleAvailabilityChange);
+      socket.off('ingredient.availabilityChanged', handleAvailabilityChange);
     };
   }, [socket, loadMenu]);
 
@@ -94,11 +97,10 @@ export default function MenuPage() {
                   }`}
                 >
                   <div className="relative w-full h-48 mb-4 rounded-xl overflow-hidden bg-amber-50 flex items-center justify-center border border-amber-100">
-                    <img
-                      src={getDrinkImage(drink.id)}
+                    <DrinkImage
+                      drinkId={drink.id}
                       alt={drink.name}
                       className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-300"
-                      loading="lazy"
                     />
                   </div>
                   <h3 className="text-xl font-bold text-amber-900 mb-1.5">{drink.name}</h3>

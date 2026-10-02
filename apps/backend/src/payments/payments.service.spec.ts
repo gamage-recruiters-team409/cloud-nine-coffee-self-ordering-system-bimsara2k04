@@ -168,8 +168,99 @@ describe('PaymentsService', () => {
     );
   });
 
-  describe('initPayment', () => {
+  describe('initPayment — sandbox (self-contained checkout)', () => {
+    const PENDING = {
+      id: 'order-1',
+      orderNumber: 7,
+      total: 100,
+      paymentStatus: 'PENDING',
+      diningOption: 'DINE_IN',
+      customerName: 'Nimal Perera',
+      items: [{ quantity: 2, drinkName: 'Cappuccino' }],
+    };
+
+    beforeEach(() => {
+      mockPrisma.order.findUnique.mockResolvedValue(PENDING);
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue({
+        tokenHash: 'token-abc',
+      });
+    });
+
+    it('routes to a local checkout instead of the PayHere hosted page', async () => {
+      const result = await service.initPayment('order-1', {});
+
+      expect(result.provider).toBe('local');
+      expect(result.mode).toBe('sandbox');
+      expect(result.method).toBe('GET');
+      // Must never point the browser at PayHere's sandbox domain.
+      expect(result.action).not.toContain('payhere.lk');
+      expect(result.action).toMatch(/^\/kiosk\/sandbox-checkout\?/);
+    });
+
+    it('never sends merchant credentials to the browser', async () => {
+      const result = await service.initPayment('order-1', {});
+      const serialised = JSON.stringify(result);
+
+      expect(serialised).not.toContain(MERCHANT_ID);
+      expect(serialised).not.toContain(SECRET);
+      expect(result.fields).not.toHaveProperty('hash');
+      expect(result.fields).not.toHaveProperty('merchant_id');
+    });
+
+    it('works with no merchant credentials at all', async () => {
+      // This is the whole point of the local page: sandbox must not depend on
+      // PayHere being configured correctly.
+      process.env.PAYHERE_MERCHANT_ID = '';
+      process.env.PAYHERE_MERCHANT_SECRET = '';
+
+      await expect(service.initPayment('order-1', {})).resolves.toMatchObject({
+        provider: 'local',
+      });
+    });
+
+    it('works with an unreachable BACKEND_URL, since no notify callback is needed', async () => {
+      process.env.BACKEND_URL = 'http://localhost:3001';
+
+      await expect(service.initPayment('order-1', {})).resolves.toMatchObject({
+        provider: 'local',
+      });
+    });
+
+    it('carries the amount, order number and token for the payment page', async () => {
+      const result = await service.initPayment('order-1', {});
+
+      expect(result.fields.amount).toBe('100.00');
+      expect(result.fields.currency).toBe('LKR');
+      expect(result.fields.orderNumber).toBe('7');
+      expect(result.fields.items).toBe('2 x Cappuccino');
+      expect(result.fields.diningOption).toBe('DINE_IN');
+      expect(result.action).toContain('token=token-abc');
+      expect(result.action).toContain('amount=100.00');
+    });
+
+    it('rejects an order that is already paid', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        ...PENDING,
+        paymentStatus: 'PAID',
+      });
+
+      await expect(service.initPayment('order-1', {})).rejects.toThrow(BadRequestException);
+    });
+
+    it('mints a tracking token if the order somehow has none yet', async () => {
+      mockPrisma.orderTrackingToken.findUnique.mockResolvedValue(null);
+      mockOrders.issueTrackingToken.mockResolvedValue('freshly-minted');
+
+      const result = await service.initPayment('order-1', {});
+
+      expect(mockOrders.issueTrackingToken).toHaveBeenCalledWith('order-1');
+      expect(result.fields.token).toBe('freshly-minted');
+    });
+  });
+
+  describe('initPayment — live (signed PayHere checkout)', () => {
     it('fails fast when merchant credentials are missing', async () => {
+      process.env.PAYHERE_SANDBOX = 'false';
       process.env.PAYHERE_MERCHANT_ID = '';
 
       await expect(service.initPayment('order-1', {})).rejects.toThrow(
@@ -177,7 +268,8 @@ describe('PaymentsService', () => {
       );
     });
 
-    it('returns a signed sandbox checkout payload and never exposes the secret', async () => {
+    it('returns a signed live checkout payload and never exposes the secret', async () => {
+      process.env.PAYHERE_SANDBOX = 'false';
       mockPrisma.order.findUnique.mockResolvedValue({
         id: 'order-1',
         orderNumber: 7,
@@ -193,7 +285,9 @@ describe('PaymentsService', () => {
 
       const result = await service.initPayment('order-1', {});
 
-      expect(result.action).toBe('https://sandbox.payhere.lk/pay/checkout');
+      expect(result.action).toBe('https://www.payhere.lk/pay/checkout');
+      expect(result.provider).toBe('payhere');
+      expect(result.mode).toBe('live');
       expect(result.method).toBe('POST');
       expect(result.fields.merchant_id).toBe(MERCHANT_ID);
       expect(result.fields.order_id).toBe('order-1');
@@ -206,6 +300,7 @@ describe('PaymentsService', () => {
     });
 
     it('carries the tracking token in the return_url path so the QR survives the redirect', async () => {
+      process.env.PAYHERE_SANDBOX = 'false';
       // PayHere can drop the query string, and the kiosk may be on a different
       // origin than PUBLIC_URL, which breaks sessionStorage. The path survives
       // both, so the return page can always render the QR.
@@ -229,6 +324,7 @@ describe('PaymentsService', () => {
     });
 
     it('mints a tracking token if the order somehow has none yet', async () => {
+      process.env.PAYHERE_SANDBOX = 'false';
       mockPrisma.order.findUnique.mockResolvedValue({
         id: 'order-1',
         orderNumber: 7,
@@ -258,6 +354,7 @@ describe('PaymentsService', () => {
     });
 
     it('refuses to issue checkout fields when BACKEND_URL points at localhost', async () => {
+      process.env.PAYHERE_SANDBOX = 'false';
       // PayHere posts the confirmation to notify_url from its own servers, so
       // a loopback notify_url means the callback can never arrive and the
       // order would sit PENDING forever after a real charge.
@@ -272,6 +369,7 @@ describe('PaymentsService', () => {
     it.each(['http://127.0.0.1:3001', 'http://0.0.0.0:3001', 'http://[::1]:3001'])(
       'treats %s as unreachable',
       async (url) => {
+        process.env.PAYHERE_SANDBOX = 'false';
         process.env.BACKEND_URL = url;
 
         await expect(service.initPayment('order-1', {})).rejects.toThrow(
@@ -281,6 +379,7 @@ describe('PaymentsService', () => {
     );
 
     it('rejects a malformed BACKEND_URL', async () => {
+      process.env.PAYHERE_SANDBOX = 'false';
       process.env.BACKEND_URL = 'not-a-url';
 
       await expect(service.initPayment('order-1', {})).rejects.toThrow(/not a valid URL/i);

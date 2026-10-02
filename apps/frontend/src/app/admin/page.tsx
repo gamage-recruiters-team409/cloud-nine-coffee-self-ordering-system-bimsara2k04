@@ -17,6 +17,7 @@ import {
   ExternalLink,
   ChevronRight,
   ShieldCheck,
+  Pencil,
 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/api';
 
@@ -202,6 +203,14 @@ export default function AdminDashboardPage() {
             >
               <Coffee size={15} />
               Barista Queue
+            </Link>
+
+            <Link
+              href="/admin/menu"
+              className="flex items-center gap-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-lg transition-colors"
+            >
+              <Pencil size={15} />
+              Menu &amp; Prices
             </Link>
 
             <Link
