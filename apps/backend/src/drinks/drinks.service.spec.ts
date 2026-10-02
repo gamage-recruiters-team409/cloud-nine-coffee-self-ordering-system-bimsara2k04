@@ -213,7 +213,7 @@ describe('DrinksService', () => {
   });
 
   describe('availability derivation', () => {
-    it('marks a drink unavailable when one of its ingredients is out', async () => {
+    it('reports a drink with an out-of-stock ingredient as not orderable', async () => {
       mockPrisma.drink.findMany.mockResolvedValue([
         {
           ...drinkFixture,
@@ -223,7 +223,48 @@ describe('DrinksService', () => {
 
       const [drink] = await service.findAll();
 
+      // Ingredient stock is sellability, not menu visibility, so it must not
+      // overwrite the admin-controlled flag.
+      expect(drink.isOrderable).toBe(false);
+      expect(drink.isAvailable).toBe(true);
+    });
+
+    it('round-trips the Hide/Show toggle for a drink with an out-of-stock ingredient', async () => {
+      // Regression: the toggle used to be unclickable for these drinks. The
+      // stored flag flipped to true while the response still reported the
+      // combined value, so the button stayed on "Show" forever.
+      mockPrisma.drink.findUnique.mockResolvedValue({ id: drinkFixture.id });
+      mockPrisma.drink.update.mockResolvedValue({
+        ...drinkFixture,
+        isAvailable: true,
+        ingredients: [{ ingredient: { id: 'i1', isAvailable: false } }],
+      });
+
+      const updated = await service.update(drinkFixture.id, { isAvailable: true });
+
+      expect(mockPrisma.drink.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ isAvailable: true }),
+        }),
+      );
+      // The admin sees "available", so the control flips to Hide.
+      expect(updated.isAvailable).toBe(true);
+      expect(updated.isOrderable).toBe(false);
+    });
+
+    it('reports a drink hidden by the admin as unavailable and not orderable', async () => {
+      mockPrisma.drink.findMany.mockResolvedValue([
+        {
+          ...drinkFixture,
+          isAvailable: false,
+          ingredients: [{ ingredient: { id: 'i1', isAvailable: true } }],
+        },
+      ]);
+
+      const [drink] = await service.findAll();
+
       expect(drink.isAvailable).toBe(false);
+      expect(drink.isOrderable).toBe(false);
     });
 
     it('keeps a drink available when all ingredients are in stock', async () => {

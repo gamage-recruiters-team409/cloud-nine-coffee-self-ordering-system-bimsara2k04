@@ -74,7 +74,14 @@ export class DrinksService {
 
     return {
       ...drink,
-      isAvailable: isDrinkAvailable,
+      // `isAvailable` stays the admin-controlled menu flag so the Hide/Show
+      // toggle round-trips. It used to be overwritten with the combined
+      // value, which made a drink with an out-of-stock ingredient impossible
+      // to switch back on: the stored flag flipped to true while the response
+      // still read false, so the button always looked unclickable.
+      isAvailable: Boolean(drink.isAvailable),
+      // Sellability stays available separately for anyone who needs it.
+      isOrderable: isDrinkAvailable,
       modifierGroups,
     };
   }

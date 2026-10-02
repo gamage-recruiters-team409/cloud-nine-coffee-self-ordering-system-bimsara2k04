@@ -21,6 +21,7 @@ export class UpdateDrinkDto {
   @IsString()
   description?: string;
 
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
