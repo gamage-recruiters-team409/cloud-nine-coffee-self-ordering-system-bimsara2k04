@@ -46,6 +46,17 @@ export default function MenuPage() {
     };
   }, [socket, loadMenu]);
 
+  // An item an admin has hidden must not appear on the kiosk at all, rather
+  // than being listed greyed out and unclickable: a hidden item is off the
+  // menu, not sold out. Categories left with nothing to show are dropped so we
+  // never render a bare heading.
+  const visibleCategories = categories
+    .map((category) => ({
+      ...category,
+      drinks: category.drinks?.filter((drink) => drink.isAvailable) ?? [],
+    }))
+    .filter((category) => category.drinks.length > 0);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-amber-50 flex items-center justify-center">
@@ -77,24 +88,15 @@ export default function MenuPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-8 py-8">
-        {categories.map((category) => (
+        {visibleCategories.map((category) => (
           <section key={category.id} className="mb-12">
             <h2 className="text-3xl font-bold text-amber-900 mb-6">{category.name}</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {category.drinks?.map((drink) => (
                 <Link
                   key={drink.id}
-                  href={drink.isAvailable ? `/kiosk/drink/${drink.id}` : '#'}
-                  onClick={(e) => {
-                    if (!drink.isAvailable) {
-                      e.preventDefault();
-                    }
-                  }}
-                  className={`group block bg-white rounded-2xl p-5 shadow-md transition-all overflow-hidden border border-amber-100/60 ${
-                    drink.isAvailable
-                      ? 'hover:shadow-xl hover:-translate-y-1 cursor-pointer'
-                      : 'opacity-50 cursor-not-allowed pointer-events-none'
-                  }`}
+                  href={`/kiosk/drink/${drink.id}`}
+                  className="group block bg-white rounded-2xl p-5 shadow-md transition-all overflow-hidden border border-amber-100/60 hover:shadow-xl hover:-translate-y-1 cursor-pointer"
                 >
                   <div className="relative w-full h-48 mb-4 rounded-xl overflow-hidden bg-amber-50 flex items-center justify-center border border-amber-100">
                     <DrinkImage
@@ -111,15 +113,9 @@ export default function MenuPage() {
                     <p className="text-2xl font-extrabold text-amber-800">
                       Rs. {parseFloat(drink.price).toLocaleString()}
                     </p>
-                    {drink.isAvailable ? (
-                      <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
-                        Customize →
-                      </span>
-                    ) : (
-                      <span className="text-xs font-bold text-red-700 bg-red-50 px-3 py-1 rounded-full border border-red-200">
-                        Unavailable
-                      </span>
-                    )}
+                    <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
+                      Customize →
+                    </span>
                   </div>
                 </Link>
               ))}

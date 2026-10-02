@@ -26,7 +26,10 @@ export class CategoriesService {
       ...cat,
       drinks: cat.drinks.map((drink) => ({
         ...drink,
-        isAvailable:
+        // Menu visibility only — see DrinksService.resolveDrinkAvailability
+        // for why this must not fold in ingredient stock.
+        isAvailable: Boolean(drink.isAvailable),
+        isOrderable:
           Boolean(drink.isAvailable) &&
           (!drink.ingredients ||
             drink.ingredients.every((di) => di.ingredient?.isAvailable !== false)),
