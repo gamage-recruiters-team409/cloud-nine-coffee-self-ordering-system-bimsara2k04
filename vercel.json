@@ -1,0 +1,31 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "backend": {
+      "root": "apps/backend",
+      "framework": "nestjs",
+      "buildCommand": "npm run build",
+      "installCommand": "npm install"
+    },
+    "frontend": {
+      "root": "apps/frontend",
+      "framework": "nextjs",
+      "buildCommand": "npm run build",
+      "installCommand": "npm install"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "backend"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "frontend"
+      }
+    }
+  ]
+}

@@ -64,6 +64,7 @@ export class TrackingService {
       select: {
         orderNumber: true,
         status: true,
+        paymentStatus: true,
         diningOption: true,
         customerName: true,
         createdAt: true,
@@ -86,6 +87,11 @@ export class TrackingService {
       status: order.status,
       statusLabel: STATUS_LABELS[order.status],
       statusMessage: STATUS_MESSAGES[order.status],
+      // The tracking token is minted at order creation so the QR works
+      // immediately, which means this can be read before the notify callback
+      // confirms payment. Surfacing only a boolean keeps the public payload
+      // free of payment details.
+      paymentConfirmed: order.paymentStatus === 'PAID',
       diningOption: order.diningOption,
       customerName: firstNameOnly(order.customerName),
       items: order.items.map((item) => ({

@@ -90,7 +90,7 @@ Update the following variables as needed:
 
 ```env
 # PostgreSQL
-DATABASE_URL="postgresql://cloud_nine:cloud_nine@localhost:5432/cloud_nine?schema=public"
+DATABASE_URL="postgresql://cloud_nine:cloud_nine@localhost:5434/cloud_nine?schema=public"
 
 # Backend
 PORT=3001
@@ -99,6 +99,12 @@ JWT_EXPIRES_IN="8h"
 CORS_ORIGIN="http://localhost:3000"
 PUBLIC_URL="http://localhost:3000"
 TRACKING_TOKEN_EXPIRES_HOURS="24"
+
+# PayHere Sandbox
+PAYHERE_MERCHANT_ID="your-sandbox-merchant-id"
+PAYHERE_MERCHANT_SECRET="your-sandbox-merchant-secret"
+PAYHERE_SANDBOX="true"
+BACKEND_URL="http://localhost:3001"
 
 # Frontend
 NEXT_PUBLIC_API_URL="http://localhost:3001"
@@ -213,6 +219,29 @@ This will:
 
 Access the application at `http://localhost:3000`
 
+### Vercel Multi-Services Deployment
+
+This project is configured to deploy as a unified multi-service project on Vercel using `vercel.json`:
+
+1. **Routing Architecture**:
+   - `/api/(.*)` routes to the NestJS `backend` service (`apps/backend`)
+   - `/(.*)` routes to the Next.js `frontend` service (`apps/frontend`)
+
+2. **Deploy with Vercel CLI**:
+   ```bash
+   vercel
+   ```
+
+3. **Configure Environment Variables on Vercel**:
+   - `DATABASE_URL`: Hosted PostgreSQL connection string (e.g. Supabase, Neon)
+   - `JWT_SECRET`: Random secure string
+   - `CORS_ORIGIN`: `https://<your-project>.vercel.app`
+   - `PUBLIC_URL`: `https://<your-project>.vercel.app`
+   - `BACKEND_URL`: `https://<your-project>.vercel.app/api`
+   - `NEXT_PUBLIC_API_URL`: `/api` (or `https://<your-project>.vercel.app/api`)
+   - `PAYHERE_MERCHANT_ID`: Your PayHere Merchant ID
+   - `PAYHERE_MERCHANT_SECRET`: Your PayHere Merchant Secret
+
 ### Manual Deployment
 
 1. Build both applications:
@@ -258,15 +287,21 @@ cd apps/frontend && npm start
 - `GET /categories` - List all drink categories with drinks
 - `GET /drinks` - List all drinks with modifiers
 - `GET /drinks/:id` - Get drink details
-- `POST /orders` - Place an order
-- `GET /tracking/:token` - Get order by tracking token
-- `GET /tracking/:token/qr` - Get QR code for tracking
+- `POST /orders` - Place an order (PENDING payment)
+- `POST /payments/payhere/init/:orderId` - Initialize PayHere checkout payload & hash
+- `POST /payments/payhere/notify` - Server-to-server PayHere payment confirmation webhook
+- `POST /payments/payhere/sandbox/approve/:token` - Instant sandbox approval for return flow (Sandbox only)
+- `GET /payments/payhere/status/:orderId` - Query payment confirmation status by order ID or order number
+- `GET /payments/payhere/status/by-token/:token` - Query payment confirmation status by tracking token
+- `GET /payments/payhere/status/latest` - Recovery lookup for most recent order
+- `GET /tracking/:token` - Get sanitized order details by safe tracking token
+- `GET /tracking/:token/qr` - Get QR code image for tracking
 
 ### Staff/Admin Endpoints (JWT Required)
 - `POST /auth/login` - Staff login
 - `GET /orders` - List orders (with optional status filter)
 - `GET /orders/:id` - Get order details
-- `PATCH /orders/:id/status` - Update order status
+- `PATCH /orders/:id/status` - Update order status (Workflow transitions)
 - `GET /ingredients` - List all ingredients
 - `PATCH /ingredients/:id/availability` - Toggle ingredient availability
 - `GET /reports/summary` - Sales summary (Admin only)

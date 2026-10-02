@@ -35,9 +35,30 @@ export default function TrackingPage() {
     }
   }, [token]);
 
+  /**
+   * Load, with a hard bail-out.
+   *
+   * `fetchAPI` aborts after 15s, but this guard also covers the case where the
+   * request resolves yet the response is unusable. Either way the customer must
+   * never be left staring at "Loading order..." with no way forward, so the
+   * pending state is force-resolved into a real message.
+   */
   useEffect(() => {
     if (!token) return;
+
+    let cancelled = false;
+    const bail = setTimeout(() => {
+      if (cancelled) return;
+      setLoading(false);
+      setError((prev) => prev ?? 'We could not load your order. Please check your connection.');
+    }, 20000);
+
     loadOrder();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(bail);
+    };
   }, [token, loadOrder]);
 
   /**
@@ -102,10 +123,21 @@ export default function TrackingPage() {
     return () => clearInterval(id);
   }, [token, order?.status, loadOrder]);
 
-  if (loading) {
+if (loading) {
     return (
-      <div className="min-h-screen bg-amber-50 flex items-center justify-center">
-        <p className="text-2xl text-amber-900">Loading order...</p>
+      <div className="min-h-screen bg-amber-50 flex items-center justify-center p-8">
+        <div className="text-center">
+          <p className="text-2xl text-amber-900 mb-4">Loading order...</p>
+          <p className="text-gray-500 text-sm mb-8">
+            If this keeps going, your tracking link may have expired.
+          </p>
+          <a
+            href="/kiosk/menu"
+            className="inline-block bg-amber-600 hover:bg-amber-700 text-white py-3 px-6 rounded-xl font-bold"
+          >
+            Start a new order
+          </a>
+        </div>
       </div>
     );
   }
@@ -139,8 +171,14 @@ export default function TrackingPage() {
           </div>
 
           <div className={`border-2 rounded-xl p-6 text-center mb-8 ${STATUS_COLORS[order.status]}`}>
-            <p className="text-2xl font-bold mb-2">{order.statusLabel}</p>
-            <p className="text-lg">{order.statusMessage}</p>
+            <p className="text-2xl font-bold mb-2">
+              {order.paymentConfirmed ? order.statusLabel : 'Confirming Payment'}
+            </p>
+            <p className="text-lg">
+              {order.paymentConfirmed
+                ? order.statusMessage
+                : 'We are waiting for PayHere to confirm your payment. This page updates automatically.'}
+            </p>
           </div>
 
           <div className="mb-6 flex flex-wrap gap-3 text-sm">

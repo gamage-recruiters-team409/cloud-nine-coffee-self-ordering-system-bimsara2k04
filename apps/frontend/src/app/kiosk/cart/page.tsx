@@ -7,6 +7,7 @@ import { fetchAPI } from '@/lib/api';
 import { getDrinkImage } from '@/lib/images';
 import { useState } from 'react';
 import { PayHereInitResponse } from '@/types';
+import { rememberPendingOrder } from '@/lib/pendingOrder';
 
 /**
  * Submits a hidden form to PayHere so the browser navigates to the
@@ -58,7 +59,11 @@ export default function CartPage() {
         customerName: customerName.trim() || undefined,
       };
 
-      const pendingOrder = await fetchAPI<{ id: string; orderNumber: number }>('/orders', {
+      const pendingOrder = await fetchAPI<{
+        id: string;
+        orderNumber: number;
+        trackingToken?: string | null;
+      }>('/orders', {
         method: 'POST',
         body: JSON.stringify(orderData),
       });
@@ -78,6 +83,13 @@ export default function CartPage() {
 
       // Step 3: Hand the browser over to PayHere. Nothing is marked paid here —
       // only the PayHere notify callback can confirm payment.
+      // Stash the order first: PayHe's redirect does not reliably keep our
+      // query string, and the return page needs to know what to await.
+      rememberPendingOrder({
+        orderId: pendingOrder.id,
+        orderNumber: pendingOrder.orderNumber,
+        trackingToken: pendingOrder.trackingToken,
+      });
       clearCart();
       submitToPayHere(payhere);
     } catch (error: any) {
