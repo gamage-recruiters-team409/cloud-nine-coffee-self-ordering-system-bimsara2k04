@@ -302,6 +302,8 @@ cd apps/frontend && npm start
 - `GET /orders` - List orders (with optional status filter)
 - `GET /orders/:id` - Get order details
 - `PATCH /orders/:id/status` - Update order status (Workflow transitions)
+- `POST /drinks` - Create a menu drink (Admin only)
+- `PATCH /drinks/:id` - Update drink price, details, or availability (Admin only)
 - `GET /ingredients` - List all ingredients
 - `PATCH /ingredients/:id/availability` - Toggle ingredient availability
 - `GET /reports/summary` - Sales summary (Admin only)

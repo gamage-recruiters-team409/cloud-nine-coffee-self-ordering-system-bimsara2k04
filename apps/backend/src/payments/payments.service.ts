@@ -30,6 +30,23 @@ const STATUS_CANCELLED = '-1';
 const STATUS_FAILED = '-2';
 const STATUS_CHARGEDBACK = '-3';
 
+/**
+ * What the kiosk needs to take the customer to a payment page.
+ *
+ * `provider` decides who hosts it: 'payhere' is the real signed hosted
+ * checkout (live only), 'local' is our own sandbox page. `fields` stays a
+ * string map because it is a form payload in both cases rather than a fixed
+ * shape — the sandbox descriptor and the PayHere descriptor share a shape but
+ * not a vocabulary.
+ */
+export type PaymentCheckoutDescriptor = {
+  provider: 'payhere' | 'local';
+  action: string;
+  method: 'POST' | 'GET';
+  mode: 'sandbox' | 'live';
+  fields: Record<string, string>;
+};
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -109,9 +126,16 @@ export class PaymentsService {
    * Builds the complete set of PayHere form fields for an existing PENDING order.
    * The secret never leaves the backend — only the resulting `hash` is returned.
    */
-  async initPayment(orderId: string, dto: InitPayHerePaymentDto) {
-    this.assertConfigured();
-    this.assertNotifyUrlReachable();
+  async initPayment(
+    orderId: string,
+    dto: InitPayHerePaymentDto,
+  ): Promise<PaymentCheckoutDescriptor> {
+    // The hosted PayHere checkout is only used for live payments, so only live
+    // mode needs merchant credentials and a publicly reachable notify_url.
+    if (!this.isSandbox()) {
+      this.assertConfigured();
+      this.assertNotifyUrlReachable();
+    }
 
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -132,19 +156,6 @@ export class PaymentsService {
       );
     }
 
-    const amount = formatAmount(Number(order.total));
-    const hash = generateCheckoutHash(
-      this.merchantId,
-      order.id,
-      amount,
-      CURRENCY,
-      this.merchantSecret,
-    );
-
-    const firstName = dto.firstName?.trim() || order.customerName?.trim() || 'Customer';
-    const [nameFirst, ...nameRest] = firstName.split(/\s+/);
-    const lastName = dto.lastName?.trim() || nameRest.join(' ') || 'Kiosk';
-
     // Mark the intent to pay so the order no longer looks abandoned in admin.
     await this.prisma.order.update({
       where: { id: order.id },
@@ -162,10 +173,28 @@ export class PaymentsService {
     });
     const token = existingToken?.tokenHash ?? (await this.ordersService.issueTrackingToken(order.id));
 
+    if (this.isSandbox()) {
+      return this.buildSandboxCheckout(order, token);
+    }
+
+    const amount = formatAmount(Number(order.total));
+    const hash = generateCheckoutHash(
+      this.merchantId,
+      order.id,
+      amount,
+      CURRENCY,
+      this.merchantSecret,
+    );
+
+    const firstName = dto.firstName?.trim() || order.customerName?.trim() || 'Customer';
+    const [nameFirst, ...nameRest] = firstName.split(/\s+/);
+    const lastName = dto.lastName?.trim() || nameRest.join(' ') || 'Kiosk';
+
     return {
+      provider: 'payhere' as const,
       action: this.checkoutUrl,
       method: 'POST' as const,
-      mode: this.isSandbox() ? ('sandbox' as const) : ('live' as const),
+      mode: 'live' as const,
       fields: {
         merchant_id: this.merchantId,
         return_url: `${this.frontendUrl}/kiosk/success/${token}`,
@@ -183,6 +212,56 @@ export class PaymentsService {
         currency: CURRENCY,
         amount,
         hash,
+      },
+    };
+  }
+
+  /**
+   * SANDBOX ONLY: a self-contained checkout that never touches PayHere.
+   *
+   * PayHe's hosted sandbox page is a third-party dependency we do not control.
+   * It intermittently rejects perfectly valid requests with "Unauthorized
+   * payment request", and configuring it at all requires a merchant secret plus
+   * a publicly reachable notify_url. None of that is needed to exercise the
+   * order flow, so sandbox renders our own page and settles through
+   * sandboxApproveByToken instead. Live mode still uses the signed hosted
+   * PayHere checkout and is unaffected by this path.
+   *
+   * No merchant credentials appear here, which is the point: sandbox works
+   * even when they are missing or wrong.
+   */
+  private buildSandboxCheckout(
+    order: {
+      id: string;
+      orderNumber: number;
+      total: string | number | { toString(): string };
+      diningOption?: string | null;
+      items: Array<{ quantity: number; drinkName: string }>;
+    },
+    token: string,
+  ): PaymentCheckoutDescriptor {
+    const amount = formatAmount(Number(order.total));
+    const params = new URLSearchParams({
+      token,
+      orderNumber: String(order.orderNumber),
+      amount,
+    });
+
+    return {
+      provider: 'local' as const,
+      // Relative on purpose: the kiosk may be browsing localhost or the mDNS
+      // hostname, and forcing PUBLIC_URL here would break one of them.
+      action: `/kiosk/sandbox-checkout?${params.toString()}`,
+      method: 'GET' as const,
+      mode: 'sandbox' as const,
+      fields: {
+        orderId: order.id,
+        orderNumber: String(order.orderNumber),
+        token,
+        amount,
+        currency: CURRENCY,
+        items: this.buildItemsSummary(order),
+        diningOption: order.diningOption ?? '',
       },
     };
   }

@@ -8,7 +8,7 @@ import { fetchAPI } from '@/lib/api';
 import { Drink, ModifierGroup, ModifierOption } from '@/types';
 import { useCart } from '@/contexts/CartContext';
 import { useSocket } from '@/hooks/useSocket';
-import { getDrinkImage } from '@/lib/images';
+import DrinkImage from '@/components/DrinkImage';
 
 export default function DrinkPage() {
   const params = useParams();
@@ -164,11 +164,7 @@ export default function DrinkPage() {
       <main className="max-w-4xl mx-auto px-8 py-8">
         <div className="bg-white rounded-2xl p-6 sm:p-8 shadow-lg mb-8 border border-amber-100 flex flex-col sm:flex-row items-center gap-6">
           <div className="w-full sm:w-48 h-48 rounded-xl overflow-hidden bg-amber-50 shrink-0 border border-amber-200">
-            <img
-              src={getDrinkImage(drink.id)}
-              alt={drink.name}
-              className="w-full h-full object-cover object-center"
-            />
+            <DrinkImage drinkId={drink.id} alt={drink.name} className="w-full h-full object-cover object-center" />
           </div>
           <div className="flex-1 text-left">
             <h2 className="text-3xl font-bold text-amber-900 mb-2">{drink.name}</h2>

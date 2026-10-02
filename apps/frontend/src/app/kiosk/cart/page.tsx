@@ -81,8 +81,9 @@ export default function CartPage() {
         },
       );
 
-      // Step 3: Hand the browser over to PayHere. Nothing is marked paid here —
-      // only the PayHere notify callback can confirm payment.
+      // Step 3: Send the customer to whichever payment page the backend chose.
+      // Nothing is marked paid here — payment is only ever confirmed by the
+      // sandbox approval endpoint or PayHere's signed notify callback.
       // Stash the order first: PayHe's redirect does not reliably keep our
       // query string, and the return page needs to know what to await.
       rememberPendingOrder({
@@ -91,6 +92,14 @@ export default function CartPage() {
         trackingToken: pendingOrder.trackingToken,
       });
       clearCart();
+
+      if (payhere.provider === 'local') {
+        // Sandbox. The action is a same-origin path, so a plain navigation
+        // keeps the kiosk on whatever host it is already browsing.
+        window.location.assign(payhere.action);
+        return;
+      }
+
       submitToPayHere(payhere);
     } catch (error: any) {
       setCheckoutError(error.message || 'Something went wrong. Please try again.');
@@ -283,7 +292,7 @@ export default function CartPage() {
                 disabled={submitting}
                 className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 disabled:cursor-not-allowed text-white py-4 px-8 rounded-xl text-xl font-bold transition-colors"
               >
-                {submitting ? 'Redirecting to secure payment...' : 'Pay with PayHere'}
+                {submitting ? 'Redirecting to payment...' : 'Proceed to Payment'}
               </button>
             </div>
           </>
